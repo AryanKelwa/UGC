@@ -1,0 +1,5 @@
+# training-data/*
+# training-data-clean/*
+.env*
+__pycache__/
+venv
