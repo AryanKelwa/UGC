@@ -1,0 +1,6 @@
+# configs/model/qwen_7b.yaml
+model:
+  name_or_path: "Qwen/Qwen1.5-7B-Chat"
+  torch_dtype: "bfloat16"
+  use_cache: false
+  trust_remote_code: true

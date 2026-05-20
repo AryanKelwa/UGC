@@ -1,0 +1,6 @@
+# configs/dataset/customer_support.yaml
+dataset:
+  name: "customer_support"
+  path: "data/raw/csv/customer_support.csv"
+  max_length: 2048
+  test_size: 0.1

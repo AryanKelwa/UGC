@@ -1,0 +1,6 @@
+# configs/model/mistral_7b.yaml
+model:
+  name_or_path: "mistralai/Mistral-7B-Instruct-v0.2"
+  torch_dtype: "bfloat16"
+  use_cache: false
+  trust_remote_code: true

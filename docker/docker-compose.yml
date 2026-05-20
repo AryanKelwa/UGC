@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  llm-finetuning:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: llm_finetuning_pipeline
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - ..:/workspace
+    command: python3 main.py run-all

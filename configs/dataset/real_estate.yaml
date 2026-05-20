@@ -1,0 +1,35 @@
+# configs/dataset/real_estate.yaml
+# ================================
+# Dataset Configuration for Anywhere Real Estate Lead Qualification Data Pipeline
+
+# --- Gemini API Configuration ---
+api:
+  base_url: "https://generativelanguage.googleapis.com/v1beta"
+  model_name: "gemini-2.5-flash"
+  generation_config:
+    temperature: 1.0
+    maxOutputTokens: 65536
+
+# --- Pipeline Generation Settings ---
+generation:
+  total_batches: 34
+  start_batch: 1
+  max_workers: 4
+  between_batch_sleep: 1
+  max_retries_per_batch: 10
+  retry_sleep_seconds: 10
+  request_timeout: 180
+  rate_limit_codes:
+    - 429
+    - 503
+
+# --- PII Anonymization Settings ---
+cleaning:
+  pii_workers: 4
+
+# --- Data Paths (Relative to project root) ---
+paths:
+  env_file: ".env"
+  raw_dir: "data/raw/conversations"
+  interim_dir: "data/interim/anonymized"
+  processed_dir: "data/processed"

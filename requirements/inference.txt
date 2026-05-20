@@ -1,0 +1,4 @@
+vllm>=0.3.0
+uvicorn
+fastapi
+jinja2
