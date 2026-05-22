@@ -140,9 +140,9 @@ cython_debug/
 
 # --- Enterprise LLM / ML Specifics ---
 # Datasets and generated files
-data/raw/conversations/batch_*
-data/interim/anonymized/batch_*
-data/processed/*.jsonl
+# data/raw/conversations/batch_*
+# data/interim/anonymized/batch_*
+# data/processed/*.jsonl
 data/cache/
 
 # Training checkpoints and output models

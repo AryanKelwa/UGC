@@ -47,6 +47,33 @@ def parse_args() -> argparse.Namespace:
     # 3. Prepare Command
     subparsers.add_parser("prepare", help="Merge interim batches and create train/val/test splits")
 
+    # 3b. Upload Command
+    upload = subparsers.add_parser(
+        "upload",
+        help="Merge all raw batch JSON files into a unified temp file and upload to MongoDB",
+    )
+    upload.add_argument(
+        "--raw-dir",
+        type=str,
+        default=None,
+        help="Override path to raw batches directory (default: data/raw).",
+    )
+    upload.add_argument(
+        "--overwrite-existing",
+        action="store_true",
+        help="Replace existing MongoDB documents instead of skipping them.",
+    )
+    upload.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Parse and merge records but do NOT write to MongoDB.",
+    )
+    upload.add_argument(
+        "--keep-temp",
+        action="store_true",
+        help="Keep the intermediate temp JSONL file after upload (for inspection).",
+    )
+
     # 4. Train-SFT Command
     train = subparsers.add_parser("train-sft", help="Trigger Supervised Fine-Tuning (SFT) adapters training")
     train.add_argument("--model", type=str, default="llama3_8b", help="Model config name inside configs/model/")
@@ -58,6 +85,23 @@ def parse_args() -> argparse.Namespace:
     run_all.add_argument("--training", type=str, default="sft", help="Training config name")
     run_all.add_argument("--start-batch", type=int, help="Override starting batch index")
     run_all.add_argument("--total-batches", type=int, help="Override count of batches to generate")
+
+    # 6. ETL Command
+    etl = subparsers.add_parser(
+        "etl",
+        help="Run Kafka-based ETL pipeline: MongoDB raw → Transform → MongoDB processed",
+    )
+    etl.add_argument(
+        "--parallel",
+        action="store_true",
+        help="Run Transform and Load phases concurrently.",
+    )
+    etl.add_argument(
+        "--all",
+        dest="extract_all",
+        action="store_true",
+        help="Re-extract ALL raw records (default: only pending).",
+    )
 
     return parser.parse_args()
 
@@ -87,6 +131,16 @@ def main() -> None:
             success = run_cleaning()
         elif args.command == "prepare":
             success = run_preparation()
+        elif args.command == "upload":
+            from src.data.upload_to_mongo import run_upload
+            from pathlib import Path
+            raw_dir = Path(args.raw_dir) if getattr(args, "raw_dir", None) else None
+            success = run_upload(
+                raw_dir=raw_dir,
+                overwrite_existing=getattr(args, "overwrite_existing", False),
+                dry_run=getattr(args, "dry_run", False),
+                keep_temp=getattr(args, "keep_temp", False),
+            )
         elif args.command == "train-sft":
             from src.utils.helpers import get_project_root
             root = get_project_root()
@@ -103,6 +157,16 @@ def main() -> None:
                 training_type=args.training
             )
             success = True
+
+        elif args.command == "etl":
+            from src.etl.pipeline import run_etl_pipeline
+            batch_filter = {} if getattr(args, "extract_all", False) else {"etl_status": "pending"}
+            summary = run_etl_pipeline(
+                batch_filter=batch_filter,
+                parallel_transform_load=getattr(args, "parallel", False),
+            )
+            loaded = (summary.get("load") or {}).get("loaded", 0)
+            success = loaded > 0 or (summary.get("extract", {}).get("published_to_kafka", 0) == 0)
 
     except KeyboardInterrupt:
         log.warning("\nPipeline cancelled by user signal.")

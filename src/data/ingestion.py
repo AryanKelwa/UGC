@@ -3,6 +3,10 @@ src/data/ingestion.py
 =====================
 Handles synthetic data generation using Google Gemini REST API.
 Loads API keys, rotates them on rate-limit exceptions, and executes thread-pool multi-threaded generation.
+
+MongoDB persistence:
+  Every generated record is upserted into the `raw_batches` MongoDB collection
+  (via src.db.mongo_client) so the Kafka-based ETL pipeline can read from it.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from dotenv import load_dotenv
 from src.utils.config_loader import load_yaml_config
 from src.utils.helpers import get_project_root
 from src.data.formatting import LEAD_QUALIFICATION_PROMPT
+from src.db.mongo_client import upsert_raw_record
 
 log = logging.getLogger("pipeline.data.ingestion")
 
@@ -175,13 +180,31 @@ def parse_jsonl(raw: str) -> list[dict]:
     return records
 
 
+def _persist_batch_to_mongo(batch_num: int, records: list[dict]) -> int:
+    """Upsert every record in a batch into MongoDB. Returns number persisted."""
+    persisted = 0
+    for idx, record in enumerate(records):
+        try:
+            upsert_raw_record(batch_num, idx, record)
+            persisted += 1
+        except Exception as exc:
+            log.warning(
+                "Batch %03d record %d — MongoDB upsert failed (will still save to disk): %s",
+                batch_num, idx, exc
+            )
+    log.debug("Batch %03d — persisted %d/%d records to MongoDB.", batch_num, persisted, len(records))
+    return persisted
+
+
 def run_batch(batch_num: int, client: GeminiClient, raw_dir: Path) -> int:
-    """Generate a single batch and save to raw_dir."""
+    """Generate a single batch, save to raw_dir, and persist to MongoDB."""
     out_file = raw_dir / f"batch_{batch_num:03d}.json"
     if out_file.exists():
         try:
             existing = json.loads(out_file.read_text(encoding="utf-8"))
             log.info("Batch %03d — skipping (exists, %d examples)", batch_num, len(existing))
+            # Still attempt to upsert to MongoDB in case the DB was reset
+            _persist_batch_to_mongo(batch_num, existing)
             return len(existing)
         except Exception:
             log.warning("Batch %03d — file corrupted, recreating...", batch_num)
@@ -205,8 +228,13 @@ def run_batch(batch_num: int, client: GeminiClient, raw_dir: Path) -> int:
         raw_file.write_text(raw, encoding="utf-8")
         return 0
 
+    # ── Persist to disk (original behaviour) ─────────────────────
     out_file.write_text(json.dumps(records, indent=2, ensure_ascii=False), encoding="utf-8")
     log.info("Batch %03d — saved %d examples in %s (%.1fs)", batch_num, len(records), out_file.name, elapsed)
+
+    # ── Persist to MongoDB ────────────────────────────────────────
+    _persist_batch_to_mongo(batch_num, records)
+
     return len(records)
 
 

@@ -2,3 +2,6 @@ requests
 python-dotenv
 spacy
 pyyaml
+pymongo[srv]
+kafka-python
+bson
