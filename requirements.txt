@@ -4,4 +4,3 @@ spacy
 pyyaml
 pymongo[srv]
 kafka-python
-bson

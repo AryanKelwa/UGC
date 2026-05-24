@@ -44,12 +44,17 @@ def get_client() -> MongoClient:
     global _client
     if _client is None:
         url = os.getenv("MONGODB_URL")
+        log.info("\n\n\nConnecting to MongoDB at %s\n\n\n", url)
         if not url:
             raise EnvironmentError(
                 "MONGODB_URL is not set. Add it to your .env file."
             )
         log.info("Connecting to MongoDB …")
-        _client = MongoClient(url, serverSelectionTimeoutMS=10_000)
+        _client = MongoClient(
+            url, 
+            serverSelectionTimeoutMS=20_000, 
+            maxIdleTimeMS=60_000
+        )
         # Eagerly verify connectivity
         try:
             _client.admin.command("ping")
