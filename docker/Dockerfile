@@ -7,7 +7,14 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     git \
     curl \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install AWS CLI v2 (for S3 model uploads)
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" \
+    && unzip awscliv2.zip \
+    && ./aws/install \
+    && rm -rf aws awscliv2.zip  
 
 WORKDIR /workspace
 
@@ -17,6 +24,10 @@ COPY requirements/ requirements/
 RUN pip3 install --no-cache-dir -r requirements.txt
 RUN pip3 install --no-cache-dir -r requirements/training.txt
 RUN pip3 install --no-cache-dir -r requirements/inference.txt
+
+# Install Unsloth (Linux + CUDA accelerated LoRA training)
+RUN pip3 install --no-cache-dir "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+RUN pip3 install --no-cache-dir --no-deps xformers trl peft accelerate bitsandbytes triton
 
 # Download NLP model
 RUN python3 -m spacy download en_core_web_sm

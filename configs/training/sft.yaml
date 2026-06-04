@@ -1,22 +1,54 @@
 # configs/training/sft.yaml
+# ==========================
+# Supervised Fine-Tuning (SFT) training configuration.
+# Aligned with Unsloth + TRL SFTTrainer hyperparameters.
+
 training:
   type: "sft"
   num_train_epochs: 3
   per_device_train_batch_size: 4
   per_device_eval_batch_size: 4
   gradient_accumulation_steps: 4
-  learning_rate: 2.0e-5
+  learning_rate: 3.0e-4
   lr_scheduler_type: "cosine"
   warmup_ratio: 0.03
-  logging_steps: 10
-  evaluation_strategy: "steps"
-  eval_steps: 100
+  logging_steps: 1
+
+  # --- Evaluation ---
+  eval_strategy: "steps"
+  eval_steps: 50
+
+  # --- Checkpointing ---
   save_strategy: "steps"
-  save_steps: 100
+  save_steps: 50
+  save_total_limit: 3
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+
+  # --- Precision ---
   bf16: true
   fp16: false
-  optim: "adamw_torch"
+
+  # --- Optimizer ---
+  optim: "adamw_8bit"
   weight_decay: 0.01
   max_grad_norm: 1.0
-  seed: 42
-  report_to: "wandb"
+  gradient_checkpointing: true
+
+  # --- Dataset ---
+  max_seq_length: 2048
+  packing: true
+  dataset_num_proc: 2
+
+  # --- Early Stopping ---
+  early_stopping_patience: 3
+
+  # --- Chat Template ---
+  chat_template: "llama-3"
+
+  # --- Reporting ---
+  report_to: "tensorboard"
+
+  # --- Reproducibility ---
+  seed: 0

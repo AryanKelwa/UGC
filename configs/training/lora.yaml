@@ -1,7 +1,12 @@
 # configs/training/lora.yaml
+# ===========================
+# PEFT / LoRA adapter configuration for Unsloth FastLanguageModel.
+# Matches the Colab fine-tuning setup: r=16, alpha=16, RSLoRA enabled.
+
 peft:
   r: 16
-  lora_alpha: 32
+  lora_alpha: 16
+  lora_dropout: 0
   target_modules:
     - "q_proj"
     - "k_proj"
@@ -10,6 +15,7 @@ peft:
     - "gate_proj"
     - "up_proj"
     - "down_proj"
-  lora_dropout: 0.05
+  use_rslora: true
+  use_gradient_checkpointing: "unsloth"
   bias: "none"
   task_type: "CAUSAL_LM"

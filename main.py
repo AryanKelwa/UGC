@@ -2,7 +2,8 @@
 main.py
 =======
 Unified command-line interface (CLI) for the Enterprise LLM Fine-Tuning Pipeline.
-Manages: Data Ingestion, Anonymization, Dataset Building, SFT Training, and End-to-End runs.
+Manages: Data Ingestion, Anonymization, Dataset Building, SFT Training,
+         Evaluation, Model Export, and End-to-End runs.
 
 Usage:
     python main.py --help
@@ -10,6 +11,9 @@ Usage:
     python main.py clean
     python main.py prepare
     python main.py train-sft [--model llama3_8b] [--training sft]
+    python main.py evaluate [--model-path outputs/best_model]
+    python main.py export [--format merged_16bit] [--push-hub] [--package-sm] [--upload-s3]
+    python main.py infer [--conversation "..."]
     python main.py run-all [--model llama3_8b] [--training sft]
 """
 
@@ -79,17 +83,40 @@ def parse_args() -> argparse.Namespace:
     train.add_argument("--model", type=str, default="llama3_8b", help="Model config name inside configs/model/")
     train.add_argument("--training", type=str, default="sft", help="Training config name inside configs/training/")
 
-    # 5. Run-All Command
-    run_all = subparsers.add_parser("run-all", help="Sequentially run ingestion -> clean -> prepare -> train-sft")
+    # 5. Evaluate Command
+    evaluate = subparsers.add_parser("evaluate", help="Run model evaluation on validation set (loss + perplexity)")
+    evaluate.add_argument("--model-path", type=str, default=None, help="Path to fine-tuned model checkpoint")
+    evaluate.add_argument("--val-path", type=str, default=None, help="Path to validation JSONL file")
+    evaluate.add_argument("--batch-size", type=int, default=2, help="Evaluation batch size")
+
+    # 6. Export Command
+    export = subparsers.add_parser("export", help="Merge LoRA adapters, export GGUF, package for SageMaker")
+    export.add_argument(
+        "--format", type=str, default="merged_16bit",
+        choices=["merged_16bit", "gguf", "all"],
+        help="Export format",
+    )
+    export.add_argument("--model-path", type=str, default=None, help="Path to fine-tuned model checkpoint")
+    export.add_argument("--push-hub", action="store_true", help="Push to HuggingFace Hub after export")
+    export.add_argument("--package-sm", action="store_true", help="Create model.tar.gz for SageMaker")
+    export.add_argument("--upload-s3", action="store_true", help="Upload model.tar.gz to S3")
+
+    # 7. Infer Command
+    infer = subparsers.add_parser("infer", help="Run inference on a sample conversation")
+    infer.add_argument("--conversation", type=str, default=None, help="Conversation text to qualify")
+    infer.add_argument("--model-path", type=str, default=None, help="Path to fine-tuned model checkpoint")
+
+    # 8. Run-All Command
+    run_all = subparsers.add_parser("run-all", help="Sequentially run ingestion -> clean -> prepare -> train-sft -> evaluate -> export")
     run_all.add_argument("--model", type=str, default="llama3_8b", help="Model config name")
     run_all.add_argument("--training", type=str, default="sft", help="Training config name")
     run_all.add_argument("--start-batch", type=int, help="Override starting batch index")
     run_all.add_argument("--total-batches", type=int, help="Override count of batches to generate")
 
-    # 6. ETL Command
+    # 9. ETL Command
     etl = subparsers.add_parser(
         "etl",
-        help="Run Kafka-based ETL pipeline: MongoDB raw → Transform → MongoDB processed",
+        help="Run Kafka-based ETL pipeline: MongoDB raw -> Transform -> MongoDB processed",
     )
     etl.add_argument(
         "--parallel",
@@ -150,8 +177,39 @@ def main() -> None:
                 dataset_config_path=root / "configs" / "dataset" / "real_estate.yaml"
             )
             success = True
+
+        elif args.command == "evaluate":
+            from src.evaluation.evaluate import run_evaluation
+            from pathlib import Path
+            model_path = Path(args.model_path) if args.model_path else None
+            val_path = Path(args.val_path) if args.val_path else None
+            metrics = run_evaluation(
+                model_path=model_path,
+                val_path=val_path,
+                batch_size=args.batch_size,
+            )
+            success = metrics.get("quality_tier") != "needs_improvement"
+
+        elif args.command == "export":
+            from src.deployment.export import run_export
+            results = run_export(
+                format=args.format,
+                model_path=args.model_path,
+                push_hub=args.push_hub,
+                package_sm=args.package_sm,
+                upload_s3=args.upload_s3,
+            )
+            success = bool(results)
+
+        elif args.command == "infer":
+            from src.inference.generate import run_inference_cli
+            run_inference_cli(
+                conversation_text=args.conversation,
+                model_path=args.model_path,
+            )
+            success = True
+
         elif args.command == "run-all":
-            # For run-all, execute_end_to_end_sft_pipeline handles sequential steps
             execute_end_to_end_sft_pipeline(
                 model_name=args.model,
                 training_type=args.training

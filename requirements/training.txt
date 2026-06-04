@@ -4,9 +4,14 @@ peft>=0.9.0
 trl>=0.8.0
 bitsandbytes>=0.42.0
 accelerate>=0.27.0
+datasets>=2.16.0
 numpy
 scipy
 pandas
 tqdm
 tensorboard
 wandb
+# Unsloth — accelerated LoRA training (Linux + CUDA only)
+# Install via: pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+# Uncomment below if installing from PyPI:
+# unsloth

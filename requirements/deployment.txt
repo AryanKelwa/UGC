@@ -1,0 +1,7 @@
+# requirements/deployment.txt
+# ============================
+# Dependencies for AWS deployment and CDK infrastructure.
+boto3>=1.28.0
+sagemaker>=2.200.0
+aws-cdk-lib>=2.100.0
+constructs>=10.0.0

@@ -1,6 +1,11 @@
 # configs/model/llama3_8b.yaml
 model:
-  name_or_path: "meta-llama/Meta-Llama-3-8B-Instruct"
+  name_or_path: "unsloth/Meta-Llama-3.1-8B-bnb-4bit"
+  max_seq_length: 2048
+  load_in_4bit: true
+  dtype: null  # auto-detect
+  # Standard HF fallback
+  hf_fallback: "meta-llama/Meta-Llama-3-8B-Instruct"
   torch_dtype: "bfloat16"
   use_cache: false
   trust_remote_code: true

@@ -1,0 +1,28 @@
+# Ignore Python virtual environments
+venv/
+.venv/
+env/
+ENV/
+*.venv
+
+# Ignore local runtime files/caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Ignore local datasets, checkpoints, and outputs
+data/
+outputs/
+experiments/
+
+# Ignore version control and local env vars
+.git/
+.gitignore
+.env
+
+# Ignore IDE files
+.vscode/
+.idea/

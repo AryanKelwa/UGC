@@ -1,0 +1,38 @@
+# configs/deployment/sagemaker.yaml
+# ==================================
+# AWS SageMaker Async Inference deployment configuration.
+
+deployment:
+  # S3 paths (override via .env AWS_S3_BUCKET)
+  s3_bucket: "${AWS_S3_BUCKET}"
+  s3_model_prefix: "llama-finetune"
+
+  # SageMaker Endpoint
+  endpoint_name: "llama-finetune-async"
+  instance_type: "ml.g4dn.xlarge"
+
+  # HuggingFace container configuration
+  hf_task: "text-generation"
+  transformers_version: "4.43.0"
+  pytorch_version: "2.1.0"
+  py_version: "py310"
+  sm_num_gpus: 1
+
+  # Async Inference settings
+  async_inference:
+    output_path: "s3://${AWS_S3_BUCKET}/inference-outputs/"
+    max_concurrent_invocations: 4
+
+  # Auto-scaling policy (scale to zero when idle)
+  auto_scaling:
+    min_capacity: 0
+    max_capacity: 1
+    scale_in_cooldown: 300
+    scale_out_cooldown: 60
+    target_tracking_metric: "ApproximateBacklogSizePerInstance"
+    target_value: 2.0
+
+  # EventBridge / Lambda trigger schedule
+  trigger:
+    schedule_expression: "rate(15 minutes)"
+    enabled: true
