@@ -26,7 +26,7 @@ RUN pip3 install --no-cache-dir -r requirements/training.txt
 RUN pip3 install --no-cache-dir -r requirements/inference.txt
 
 # Install Unsloth (Linux + CUDA accelerated LoRA training)
-RUN pip3 install --no-cache-dir "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+RUN pip3 install --no-cache-dir "unsloth[colab-new]"
 RUN pip3 install --no-cache-dir --no-deps xformers trl peft accelerate bitsandbytes triton
 
 # Download NLP model
