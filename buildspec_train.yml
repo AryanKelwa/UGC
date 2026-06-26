@@ -1,0 +1,67 @@
+version: 0.2
+# buildspec_train.yml
+# ====================
+# CodePipeline Stage 4: TRAIN
+#
+# Launches a SageMaker Training Job using the ECR fine-tuning image
+# and BLOCKS until the job completes (Completed / Failed / Stopped).
+#
+# The training job runs: python main.py train-sft inside the Docker container.
+# Instance: ml.g4dn.xlarge (T4 GPU 16GB) — Flash Attention 2 disabled.
+#
+# Environment variables expected:
+#   RUN_ID                  — from DATA_PREP stage output variable
+#   AWS_S3_BUCKET           — destination S3 bucket
+#   AWS_REGION              — ap-southeast-2
+#   AWS_ACCOUNT_ID          — AWS account number
+#   AWS_SAGEMAKER_ROLE_ARN  — SageMaker execution role ARN
+
+cache:
+  paths:
+    - /root/.cache/pip/**/*   # Cache pip downloads across runs
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.10
+    commands:
+      - echo "=== Installing boto3 / sagemaker SDK ==="
+      - pip install --quiet boto3 sagemaker
+
+  pre_build:
+    commands:
+      - echo "=== Pre-build checks ==="
+      - echo "Run ID      : $RUN_ID"
+      - echo "S3 Bucket   : $AWS_S3_BUCKET"
+      - echo "Region      : $AWS_REGION"
+      - echo "Account     : $AWS_ACCOUNT_ID"
+      - echo "SM Role     : $AWS_SAGEMAKER_ROLE_ARN"
+
+      # Verify dataset exists in S3 before launching expensive training
+      - |
+        aws s3 ls s3://$AWS_S3_BUCKET/datasets/$RUN_ID/train.jsonl \
+          --region $AWS_REGION \
+        || (echo "ERROR: Training dataset not found in S3. Did DATA_PREP stage succeed?" && exit 1)
+
+  build:
+    commands:
+      - echo "=== Launching SageMaker Training Job ==="
+      - |
+        python scripts/start_training_job.py \
+          --run-id "$RUN_ID" \
+          --s3-bucket "$AWS_S3_BUCKET" \
+          --role-arn "$AWS_SAGEMAKER_ROLE_ARN" \
+          --region "$AWS_REGION"
+      # start_training_job.py blocks until the job reaches a terminal state.
+      # It exits with code 1 if the job fails, which will fail this CodeBuild stage.
+
+  post_build:
+    commands:
+      - |
+        if [ $CODEBUILD_BUILD_SUCCEEDING -eq 1 ]; then
+          echo "=== Training job completed successfully for run $RUN_ID ==="
+          echo "Model output: s3://$AWS_S3_BUCKET/llama-finetune/$RUN_ID/output/"
+        else
+          echo "=== Training job FAILED for run $RUN_ID ==="
+          echo "Check SageMaker console for logs: https://$AWS_REGION.console.aws.amazon.com/sagemaker/home?region=$AWS_REGION#/jobs"
+        fi

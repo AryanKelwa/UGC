@@ -1,0 +1,160 @@
+version: 0.2
+# buildspec_evaluate.yml
+# =======================
+# CodePipeline Stage 5: EVALUATE_AND_REGISTER
+#
+# 1. Downloads the trained model from S3 to the CodeBuild container.
+# 2. Runs evaluation (main.py evaluate) to compute perplexity and val_loss.
+# 3. Applies a quality gate — fails the stage if metrics are too poor.
+# 4. Packages the model (model.tar.gz) and uploads to S3.
+# 5. Registers the model in SageMaker Model Registry (PendingManualApproval).
+# 6. Sends SNS email to reviewer.
+#
+# Environment variables expected:
+#   RUN_ID                  — from DATA_PREP stage
+#   AWS_S3_BUCKET           — S3 bucket
+#   AWS_REGION              — ap-southeast-2
+#   AWS_SAGEMAKER_ROLE_ARN  — SageMaker execution role ARN
+#   SNS_APPROVAL_TOPIC_ARN  — SNS topic ARN for reviewer email
+#
+# Quality gate thresholds (override via env vars if needed):
+#   MAX_PERPLEXITY          — default 8.0
+#   MAX_VAL_LOSS            — default 2.0
+
+cache:
+  paths:
+    - /root/.cache/pip/**/*   # Cache pip download dir — saves ~700 MB torch re-download
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.10
+    commands:
+      - echo "=== Installing dependencies ==="
+      - pip install --quiet boto3 pymongo python-dotenv
+      # Install lightweight eval dependencies (no GPU needed — uses CPU for eval scoring)
+      # pip cache is restored from S3 on subsequent runs — skips re-downloading torch
+      - pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+      - pip install --quiet transformers peft accelerate
+
+  pre_build:
+    commands:
+      - echo "=== Checking training output exists in S3 ==="
+      - echo "Run ID: $RUN_ID"
+      - |
+        aws s3 ls s3://$AWS_S3_BUCKET/llama-finetune/$RUN_ID/output/ \
+          --region $AWS_REGION \
+        || (echo "ERROR: Training output not found — did TRAIN stage succeed?" && exit 1)
+
+      # Download model output to local path for evaluation
+      - echo "=== Downloading model from S3 ==="
+      - mkdir -p outputs/trained_model
+      - |
+        aws s3 sync \
+          s3://$AWS_S3_BUCKET/llama-finetune/$RUN_ID/output/ \
+          outputs/trained_model/ \
+          --region $AWS_REGION \
+          --quiet
+      - echo "Model downloaded to outputs/trained_model/"
+
+      # Download val split for evaluation
+      - mkdir -p data
+      - |
+        aws s3 cp \
+          s3://$AWS_S3_BUCKET/datasets/$RUN_ID/val.jsonl \
+          data/val.jsonl \
+          --region $AWS_REGION
+
+  build:
+    commands:
+      - echo "=== Running model evaluation ==="
+      - |
+        python main.py evaluate \
+          --model-path outputs/trained_model \
+          --val-path data/val.jsonl \
+          --batch-size 2
+
+      # Read metrics written by evaluate command
+      - echo "=== Checking quality gate ==="
+      - |
+        python - <<'EOF'
+        import json, os, sys, boto3
+        from datetime import datetime, timezone
+
+        run_id    = os.environ["RUN_ID"]
+        bucket    = os.environ["AWS_S3_BUCKET"]
+        region    = os.environ["AWS_REGION"]
+        max_ppl   = float(os.environ.get("MAX_PERPLEXITY", "8.0"))
+        max_loss  = float(os.environ.get("MAX_VAL_LOSS",   "2.0"))
+
+        # Load metrics written by main.py evaluate to outputs/eval_metrics.json
+        metrics_path = "outputs/eval_metrics.json"
+        if not os.path.exists(metrics_path):
+            print("ERROR: eval_metrics.json not found. Did evaluate command run?")
+            sys.exit(1)
+
+        with open(metrics_path) as f:
+            metrics = json.load(f)
+
+        perplexity   = metrics.get("perplexity", 999)
+        val_loss     = metrics.get("val_loss", 999)
+        quality_tier = metrics.get("quality_tier", "unknown")
+
+        print(f"Perplexity:   {perplexity}  (max allowed: {max_ppl})")
+        print(f"Val Loss:     {val_loss}    (max allowed: {max_loss})")
+        print(f"Quality Tier: {quality_tier}")
+
+        # Apply gate
+        if perplexity > max_ppl:
+            print(f"FAIL: perplexity {perplexity} exceeds threshold {max_ppl}")
+            sys.exit(1)
+        if val_loss > max_loss:
+            print(f"FAIL: val_loss {val_loss} exceeds threshold {max_loss}")
+            sys.exit(1)
+        if quality_tier == "needs_improvement":
+            print("FAIL: quality_tier is 'needs_improvement'")
+            sys.exit(1)
+
+        print("PASS: all quality gates cleared")
+
+        # Enrich metrics with training metadata and persist to S3
+        metrics["run_id"] = run_id
+        metrics["record_count"] = int(os.popen("wc -l < data/val.jsonl").read().strip() or 0)
+
+        s3 = boto3.client("s3", region_name=region)
+        s3.put_object(
+            Bucket=bucket,
+            Key=f"pipeline-metadata/{run_id}/eval_metrics.json",
+            Body=json.dumps(metrics, indent=2).encode(),
+            ContentType="application/json",
+        )
+        print(f"Eval metrics written to s3://{bucket}/pipeline-metadata/{run_id}/eval_metrics.json")
+        EOF
+
+      - echo "=== Packaging model as model.tar.gz for SageMaker ==="
+      - |
+        python main.py export \
+          --format merged_16bit \
+          --model-path outputs/trained_model \
+          --package-sm \
+          --upload-s3
+
+      - echo "=== Registering model in SageMaker Model Registry ==="
+      - |
+        python scripts/register_model.py \
+          --run-id "$RUN_ID" \
+          --s3-bucket "$AWS_S3_BUCKET" \
+          --role-arn "$AWS_SAGEMAKER_ROLE_ARN" \
+          --sns-topic-arn "${SNS_APPROVAL_TOPIC_ARN:-}" \
+          --region "$AWS_REGION"
+
+  post_build:
+    commands:
+      - |
+        if [ $CODEBUILD_BUILD_SUCCEEDING -eq 1 ]; then
+          echo "=== EVALUATE stage complete. Model registered. Waiting for human approval. ==="
+          echo "Run ID: $RUN_ID"
+        else
+          echo "=== EVALUATE stage FAILED — quality gate blocked deployment. ==="
+          echo "Check outputs/eval_metrics.json for details."
+        fi

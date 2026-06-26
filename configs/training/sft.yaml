@@ -2,6 +2,12 @@
 # ==========================
 # Supervised Fine-Tuning (SFT) training configuration.
 # Aligned with Unsloth + TRL SFTTrainer hyperparameters.
+#
+# ⚠️  IMPORTANT: Training instance is ml.g4dn.xlarge (T4 GPU).
+#     T4 does NOT support Flash Attention 2. attn_implementation
+#     is overridden to "eager" via the DISABLE_FLASH_ATTN env var
+#     in the SageMaker Training Job, or set explicitly below.
+
 
 training:
   type: "sft"
