@@ -48,25 +48,33 @@ phases:
 
   build:
     commands:
-      - echo "=== Exporting MongoDB records to train/val/test splits ==="
-      - python main.py prepare-etl
+      - echo "=== Step 1/2: Running ETL — processed MongoDB records → local interim files ==="
+      # Run ETL to pull processed records from MongoDB into local interim/ files.
+      # This is the equivalent of the Kafka ETL pipeline but reads already-processed
+      # records from MongoDB (etl_status=processed) directly into JSONL batch files.
+      - python main.py etl --all
+
+      - echo "=== Step 2/2: Building train/val/test splits from interim files ==="
+      # Merge interim batches, format to ChatML, shuffle, split 70/15/15.
+      # Writes data/train.jsonl, data/val.jsonl, data/test.jsonl.
+      - python main.py prepare
 
       - echo "=== Uploading splits to S3 ==="
       - |
         for split in train val test; do
-          if [ -f "data/${split}.jsonl" ]; then
-            aws s3 cp data/${split}.jsonl \
+          if [ -f "data/processed/${split}.jsonl" ]; then
+            aws s3 cp data/processed/${split}.jsonl \
               s3://$AWS_S3_BUCKET/datasets/$RUN_ID/${split}.jsonl \
               --region $AWS_REGION
             echo "Uploaded ${split}.jsonl"
           else
-            echo "WARNING: data/${split}.jsonl not found, skipping"
+            echo "WARNING: data/processed/${split}.jsonl not found, skipping"
           fi
         done
 
       # Count records for downstream logging
-      - TRAIN_COUNT=$(wc -l < data/train.jsonl 2>/dev/null || echo 0)
-      - VAL_COUNT=$(wc -l < data/val.jsonl 2>/dev/null || echo 0)
+      - TRAIN_COUNT=$(wc -l < data/processed/train.jsonl 2>/dev/null || echo 0)
+      - VAL_COUNT=$(wc -l < data/processed/val.jsonl 2>/dev/null || echo 0)
       - echo "Records uploaded — train:$TRAIN_COUNT val:$VAL_COUNT"
 
       # Write run metadata JSON to S3 for all downstream stages to reference
@@ -82,8 +90,8 @@ phases:
         meta = {
             "run_id": run_id,
             "dataset_s3_prefix": f"s3://{bucket}/datasets/{run_id}/",
-            "train_count": int(os.popen("wc -l < data/train.jsonl").read().strip() or 0),
-            "val_count": int(os.popen("wc -l < data/val.jsonl").read().strip() or 0),
+            "train_count": int(os.popen("wc -l < data/processed/train.jsonl").read().strip() or 0),
+            "val_count": int(os.popen("wc -l < data/processed/val.jsonl").read().strip() or 0),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "pipeline_execution": os.environ.get("CODEBUILD_INITIATOR", "unknown"),
         }
