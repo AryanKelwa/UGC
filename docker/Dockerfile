@@ -18,12 +18,13 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2
 
 WORKDIR /workspace
 
-# Install requirements
+# Install training requirements
 COPY requirements.txt .
 COPY requirements/ requirements/
 RUN pip3 install --no-cache-dir -r requirements.txt
 RUN pip3 install --no-cache-dir -r requirements/training.txt
-RUN pip3 install --no-cache-dir -r requirements/inference.txt
+# NOTE: requirements/inference.txt (vllm) is intentionally excluded — inference
+#       is served via the SageMaker HuggingFace DLC, not this image.
 
 # Install Unsloth (Linux + CUDA accelerated LoRA training)
 RUN pip3 install --no-cache-dir "unsloth[colab-new]"

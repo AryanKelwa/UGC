@@ -1,0 +1,103 @@
+version: 0.2
+# buildspec_data_prep.yml
+# ========================
+# CodePipeline Stage 3: DATA_PREP
+#
+# Exports processed MongoDB records to train/val/test JSONL splits
+# and uploads them to S3 under datasets/<RUN_ID>/
+#
+# Environment variables injected by CodePipeline / CodeBuild project:
+#   AWS_S3_BUCKET        — destination S3 bucket
+#   AWS_REGION           — ap-southeast-2
+#   MONGODB_URL          — read from Secrets Manager via IAM (see pipeline_stack.py)
+#   MONGODB_DB_NAME      — realestate_data
+#   PIPELINE_EXECUTION_ID— set by CodePipeline (used to form RUN_ID)
+
+env:
+  exported-variables:
+    - RUN_ID          # passed to downstream stages (TRAIN, EVALUATE, DEPLOY)
+
+cache:
+  paths:
+    - /root/.cache/pip/**/*   # Cache pip downloads across runs
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.10
+    commands:
+      - echo "=== Installing dependencies ==="
+      - pip install --quiet pymongo boto3 python-dotenv
+
+  pre_build:
+    commands:
+      - echo "=== Pre-build: generating Run ID ==="
+      # Derive a deterministic run ID from the pipeline execution ID (first 12 chars)
+      - export SHORT_ID=$(echo $CODEBUILD_INITIATOR | tr '/' '-' | tail -c 12 | tr -d '\n')
+      - export RUN_ID="run_$(date +%Y%m%d_%H%M%S)_${SHORT_ID}"
+      - echo "Run ID is $RUN_ID"
+      - echo "RUN_ID=$RUN_ID" >> /tmp/run_id.env
+
+      # Verify MongoDB connectivity before doing anything expensive
+      - python -c "
+        import os, pymongo
+        client = pymongo.MongoClient(os.environ['MONGODB_URL'], serverSelectionTimeoutMS=5000)
+        client.server_info()
+        print('MongoDB connection OK')
+        "
+
+  build:
+    commands:
+      - echo "=== Exporting MongoDB records to train/val/test splits ==="
+      - python main.py prepare-etl
+
+      - echo "=== Uploading splits to S3 ==="
+      - |
+        for split in train val test; do
+          if [ -f "data/${split}.jsonl" ]; then
+            aws s3 cp data/${split}.jsonl \
+              s3://$AWS_S3_BUCKET/datasets/$RUN_ID/${split}.jsonl \
+              --region $AWS_REGION
+            echo "Uploaded ${split}.jsonl"
+          else
+            echo "WARNING: data/${split}.jsonl not found, skipping"
+          fi
+        done
+
+      # Count records for downstream logging
+      - TRAIN_COUNT=$(wc -l < data/train.jsonl 2>/dev/null || echo 0)
+      - VAL_COUNT=$(wc -l < data/val.jsonl 2>/dev/null || echo 0)
+      - echo "Records uploaded — train:$TRAIN_COUNT val:$VAL_COUNT"
+
+      # Write run metadata JSON to S3 for all downstream stages to reference
+      - |
+        python - <<'EOF'
+        import json, os, boto3
+        from datetime import datetime, timezone
+
+        run_id = os.environ['RUN_ID']
+        bucket = os.environ['AWS_S3_BUCKET']
+        region = os.environ['AWS_REGION']
+
+        meta = {
+            "run_id": run_id,
+            "dataset_s3_prefix": f"s3://{bucket}/datasets/{run_id}/",
+            "train_count": int(os.popen("wc -l < data/train.jsonl").read().strip() or 0),
+            "val_count": int(os.popen("wc -l < data/val.jsonl").read().strip() or 0),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "pipeline_execution": os.environ.get("CODEBUILD_INITIATOR", "unknown"),
+        }
+        s3 = boto3.client("s3", region_name=region)
+        s3.put_object(
+            Bucket=bucket,
+            Key=f"pipeline-metadata/{run_id}/run_meta.json",
+            Body=json.dumps(meta, indent=2).encode(),
+            ContentType="application/json",
+        )
+        print(f"Run metadata written to s3://{bucket}/pipeline-metadata/{run_id}/run_meta.json")
+        EOF
+
+  post_build:
+    commands:
+      - echo "=== Data prep complete. RUN_ID=$RUN_ID ==="
+      - echo "Splits available at s3://$AWS_S3_BUCKET/datasets/$RUN_ID/"
