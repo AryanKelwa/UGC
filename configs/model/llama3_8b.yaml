@@ -9,4 +9,7 @@ model:
   torch_dtype: "bfloat16"
   use_cache: false
   trust_remote_code: true
-  attn_implementation: "flash_attention_2"
+  # Flash Attention 2 is used for inference (HF DLC on g4dn supports it via TGI)
+  # but DISABLED for training on ml.g4dn.xlarge (T4 GPU — no FA2 support).
+  # The SageMaker Training Job sets DISABLE_FLASH_ATTN=true which switches this to "eager".
+  attn_implementation: "flash_attention_2"  # overridden to "eager" during training

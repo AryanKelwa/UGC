@@ -1,0 +1,111 @@
+version: 0.2
+# buildspec_deploy.yml
+# =====================
+# CodePipeline Stage 7: DEPLOY
+#
+# Runs ONLY after the HUMAN_APPROVAL stage has been approved.
+# Performs a blue-green update of the SageMaker Async Inference endpoint
+# to serve the newly approved model version.
+#
+# Steps:
+#   1. Load model_registration.json from S3 (written by EVALUATE stage)
+#   2. Create new SageMaker Model resource
+#   3. Create new EndpointConfig pointing to new model weights
+#   4. Call update_endpoint() — AWS handles atomic blue-green cutover
+#   5. Poll until endpoint is InService
+#   6. Mark model as Approved in SM Model Registry
+#   7. Send SNS success notification
+#
+# Environment variables expected:
+#   RUN_ID                  — from DATA_PREP stage
+#   AWS_S3_BUCKET           — S3 bucket
+#   AWS_REGION              — ap-southeast-2
+#   AWS_ACCOUNT_ID          — AWS account number
+#   AWS_SAGEMAKER_ROLE_ARN  — SageMaker execution role ARN
+#   ENDPOINT_NAME           — llama-finetune-async (default)
+#   SNS_APPROVAL_TOPIC_ARN  — SNS topic for success notification
+
+cache:
+  paths:
+    - /root/.cache/pip/**/*   # Cache pip downloads across runs
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.10
+    commands:
+      - pip install --quiet boto3
+
+  pre_build:
+    commands:
+      - echo "=== DEPLOY stage starting ==="
+      - echo "Run ID   : $RUN_ID"
+      - echo "Endpoint : ${ENDPOINT_NAME:-llama-finetune-async}"
+      - echo "Region   : $AWS_REGION"
+
+      # Confirm registration metadata exists (sanity check)
+      - |
+        aws s3 ls \
+          s3://$AWS_S3_BUCKET/pipeline-metadata/$RUN_ID/model_registration.json \
+          --region $AWS_REGION \
+        || (echo "ERROR: model_registration.json not found. Did EVALUATE stage run?" && exit 1)
+
+      # Confirm endpoint exists before trying to update it
+      - |
+        python - <<'EOF'
+        import boto3, os, sys
+        sm = boto3.client("sagemaker", region_name=os.environ["AWS_REGION"])
+        endpoint_name = os.environ.get("ENDPOINT_NAME", "llama-finetune-async")
+        try:
+            resp = sm.describe_endpoint(EndpointName=endpoint_name)
+            status = resp["EndpointStatus"]
+            print(f"Endpoint '{endpoint_name}' found. Status: {status}")
+            if status not in ("InService", "OutOfService"):
+                print(f"WARNING: Endpoint is in unexpected state: {status}")
+        except sm.exceptions.ClientError as e:
+            if "Could not find endpoint" in str(e) or "ValidationException" in str(e):
+                print(f"ERROR: Endpoint '{endpoint_name}' does not exist.")
+                print("Deploy the CDK SageMaker stack first: cdk deploy LlmSageMakerStack")
+                sys.exit(1)
+            raise
+        EOF
+
+  build:
+    commands:
+      - echo "=== Running blue-green endpoint update ==="
+      - |
+        python scripts/update_endpoint.py \
+          --run-id "$RUN_ID" \
+          --s3-bucket "$AWS_S3_BUCKET" \
+          --endpoint-name "${ENDPOINT_NAME:-llama-finetune-async}" \
+          --role-arn "$AWS_SAGEMAKER_ROLE_ARN" \
+          --region "$AWS_REGION"
+
+  post_build:
+    commands:
+      - |
+        if [ $CODEBUILD_BUILD_SUCCEEDING -eq 1 ]; then
+          echo "=== ✅ DEPLOY stage complete. New model is live. ==="
+          echo "Run ID   : $RUN_ID"
+          echo "Endpoint : ${ENDPOINT_NAME:-llama-finetune-async}"
+
+          # Send success SNS notification if topic is configured
+          if [ -n "$SNS_APPROVAL_TOPIC_ARN" ]; then
+            aws sns publish \
+              --topic-arn "$SNS_APPROVAL_TOPIC_ARN" \
+              --subject "✅ LLM Model ${RUN_ID} Deployed to Production" \
+              --message "The fine-tuned LLaMA 3.1 8B model (run: ${RUN_ID}) has been successfully deployed to the SageMaker async inference endpoint. It is now live and scoring leads." \
+              --region "$AWS_REGION"
+          fi
+        else
+          echo "=== ❌ DEPLOY stage FAILED. Previous model is still serving. ==="
+          echo "The endpoint was NOT changed. Check logs above for the failure reason."
+
+          if [ -n "$SNS_APPROVAL_TOPIC_ARN" ]; then
+            aws sns publish \
+              --topic-arn "$SNS_APPROVAL_TOPIC_ARN" \
+              --subject "❌ LLM Deployment FAILED — Run ${RUN_ID}" \
+              --message "The deployment of run ${RUN_ID} failed. The previous model is still serving. Check CodeBuild logs for details." \
+              --region "$AWS_REGION"
+          fi
+        fi
