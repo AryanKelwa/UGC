@@ -17,18 +17,25 @@ Environment variables passed to all CodeBuild stages:
   AWS_SAGEMAKER_ROLE_ARN, SNS_APPROVAL_TOPIC_ARN
 """
 
+import yaml
+from pathlib import Path
+
 import aws_cdk as cdk
 from aws_cdk import (
     aws_codepipeline as codepipeline,
     aws_codepipeline_actions as pipeline_actions,
     aws_codebuild as codebuild,
     aws_iam as iam,
+    aws_logs as logs,
     aws_s3 as s3,
     aws_sns as sns,
     aws_sns_subscriptions as sns_subs,
     aws_secretsmanager as secretsmanager,
 )
 from constructs import Construct
+
+# Project root is 2 levels up from this file (deploy/stacks/ -> deploy/ -> root)
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
 class PipelineStack(cdk.Stack):
@@ -121,7 +128,7 @@ class PipelineStack(cdk.Stack):
             resources=["*"],
         ))
 
-        # Allow CodeBuild to register/update SM Model Registry
+        # Allow CodeBuild to register/update SM Model Registry and manage endpoint lifecycle
         cb_role.add_to_policy(iam.PolicyStatement(
             actions=[
                 "sagemaker:CreateModelPackageGroup",
@@ -131,10 +138,23 @@ class PipelineStack(cdk.Stack):
                 "sagemaker:ListModelPackages",
                 "sagemaker:CreateModel",
                 "sagemaker:CreateEndpointConfig",
+                "sagemaker:CreateEndpoint",       # needed for first-time endpoint creation
                 "sagemaker:UpdateEndpoint",
                 "sagemaker:DescribeEndpoint",
                 "sagemaker:CreateTrainingJob",
                 "sagemaker:DescribeTrainingJob",
+            ],
+            resources=["*"],
+        ))
+
+        # Allow CodeBuild to apply auto-scaling on the SageMaker endpoint
+        # (update_endpoint.py calls register_scalable_target + put_scaling_policy)
+        cb_role.add_to_policy(iam.PolicyStatement(
+            actions=[
+                "application-autoscaling:RegisterScalableTarget",
+                "application-autoscaling:PutScalingPolicy",
+                "application-autoscaling:DescribeScalableTargets",
+                "application-autoscaling:DescribeScalingPolicies",
             ],
             resources=["*"],
         ))
@@ -175,7 +195,15 @@ class PipelineStack(cdk.Stack):
                     compute_type=standard_compute,
                     privileged=(name == "Build"),  # Docker-in-Docker for BUILD stage only
                 ),
-                build_spec=codebuild.BuildSpec.from_source_filename(buildspec_file),
+                # Load the buildspec YAML from disk at synth time and embed
+                # it inline. from_source_filename() requires the project to
+                # have its own source, but in a CodePipeline the pipeline
+                # supplies the artifact — so the project source is NoSource.
+                build_spec=codebuild.BuildSpec.from_object(
+                    yaml.safe_load(
+                        (_PROJECT_ROOT / buildspec_file).read_text(encoding="utf-8")
+                    )
+                ),
                 environment_variables=shared_env_vars,
                 timeout=cdk.Duration.hours(6),  # Allow enough time for training job polling
                 # S3 pip cache: restores /root/.cache/pip before install phase.
@@ -183,10 +211,15 @@ class PipelineStack(cdk.Stack):
                 cache=codebuild.Cache.bucket(
                     cache_bucket,
                     prefix=f"pip-cache/{name.lower()}",
-                ) if name != "Build" else codebuild.Cache.no_cache(),
+                ) if name != "Build" else codebuild.Cache.none(),
                 logging=codebuild.LoggingOptions(
                     cloud_watch=codebuild.CloudWatchLoggingOptions(
-                        log_group_name=f"/llm-pipeline/{name.lower()}",
+                        log_group=logs.LogGroup(
+                            self, f"{name}LogGroup",
+                            log_group_name=f"/llm-pipeline/{name.lower()}",
+                            retention=logs.RetentionDays.THREE_MONTHS,
+                            removal_policy=cdk.RemovalPolicy.DESTROY,
+                        ),
                         prefix="build",
                     )
                 ),
