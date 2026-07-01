@@ -23,8 +23,6 @@ cache:
 
 phases:
   install:
-    runtime-versions:
-      python: 3.10
     commands:
       - echo "=== Installing dependencies ==="
       - pip install --quiet pymongo boto3 python-dotenv
