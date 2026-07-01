@@ -21,8 +21,8 @@
     "reviewer_email": "aryan.xalt2@gmail.com",
     "github_owner": "aryankelwa",
     "github_repo": "UGC",
-    "github_branch": "main",
-    "github_connection_arn": "arn:aws:codestar-connections:ap-southeast-2:711427856574:connection/REPLACE-ME",
+    "github_branch": "prod",
+    "github_connection_arn": "arn:aws:codeconnections:ap-southeast-2:711427856574:connection/bff85af6-2a58-4849-a0a3-ec73119b46f1",
     "budget_limit_usd": "50",
 
     "// --- SageMaker Endpoint ---": "",

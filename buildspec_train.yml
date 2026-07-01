@@ -22,8 +22,6 @@ cache:
 
 phases:
   install:
-    runtime-versions:
-      python: 3.10
     commands:
       - echo "=== Installing boto3 / sagemaker SDK ==="
       - pip install --quiet boto3 sagemaker

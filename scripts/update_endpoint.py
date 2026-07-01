@@ -138,6 +138,27 @@ def create_endpoint_config(
     return config_name
 
 
+def endpoint_exists(sm_client, endpoint_name: str) -> bool:
+    """Return True if the SageMaker endpoint already exists."""
+    try:
+        sm_client.describe_endpoint(EndpointName=endpoint_name)
+        return True
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ValidationException":
+            return False
+        raise
+
+
+def create_endpoint(sm_client, endpoint_name: str, config_name: str) -> None:
+    """Create the endpoint for the very first time (no existing endpoint)."""
+    print(f"[update_endpoint] 🆕 First-time creation of endpoint '{endpoint_name}'")
+    sm_client.create_endpoint(
+        EndpointName=endpoint_name,
+        EndpointConfigName=config_name,
+    )
+    _wait_for_endpoint(sm_client, endpoint_name)
+
+
 def update_endpoint(sm_client, endpoint_name: str, config_name: str) -> None:
     """Issue blue-green endpoint update and wait for InService status."""
     print(f"[update_endpoint] Updating endpoint '{endpoint_name}' → config '{config_name}'")
@@ -146,8 +167,11 @@ def update_endpoint(sm_client, endpoint_name: str, config_name: str) -> None:
         EndpointConfigName=config_name,
         RetainAllVariantProperties=False,
     )
+    _wait_for_endpoint(sm_client, endpoint_name)
 
-    # Poll until InService or Failed
+
+def _wait_for_endpoint(sm_client, endpoint_name: str) -> None:
+    """Poll until endpoint reaches InService or a terminal failure state."""
     deadline = time.time() + MAX_WAIT_SECONDS
     while time.time() < deadline:
         resp = sm_client.describe_endpoint(EndpointName=endpoint_name)
@@ -155,11 +179,11 @@ def update_endpoint(sm_client, endpoint_name: str, config_name: str) -> None:
         print(f"  [{datetime.now(timezone.utc).strftime('%H:%M:%S')}] Endpoint status: {status}")
 
         if status == "InService":
-            print(f"[update_endpoint] ✅ Endpoint is InService — blue-green complete.")
+            print(f"[update_endpoint] ✅ Endpoint is InService.")
             return
         if status in ("Failed", "OutOfService", "RollingBack"):
             failure_reason = resp.get("FailureReason", "unknown")
-            raise RuntimeError(f"Endpoint update failed: {status} — {failure_reason}")
+            raise RuntimeError(f"Endpoint reached terminal state: {status} — {failure_reason}")
 
         time.sleep(POLL_INTERVAL_SECONDS)
 
@@ -193,6 +217,50 @@ def write_deployment_metadata(s3_client, bucket: str, run_id: str, config_name: 
         ContentType="application/json",
     )
     print(f"[update_endpoint] Deployment metadata written to s3://{bucket}/{key}")
+
+
+def apply_autoscaling(endpoint_name: str, region: str) -> None:
+    """
+    Apply scale-to-zero auto-scaling on the endpoint variant.
+    Safe to call on both first creation and subsequent updates.
+    Uses ApproximateBacklogSizePerInstance: scales to 0 when idle,
+    scales to 1 when a request comes in.
+    """
+    aas_client = boto3.client("application-autoscaling", region_name=region)
+    resource_id = f"endpoint/{endpoint_name}/variant/AllTraffic"
+
+    # Register the scalable target (idempotent — safe to call multiple times)
+    aas_client.register_scalable_target(
+        ServiceNamespace="sagemaker",
+        ResourceId=resource_id,
+        ScalableDimension="sagemaker:variant:DesiredInstanceCount",
+        MinCapacity=0,
+        MaxCapacity=1,
+    )
+
+    # Apply target-tracking policy based on async backlog size
+    aas_client.put_scaling_policy(
+        PolicyName=f"{endpoint_name}-scale-to-zero",
+        ServiceNamespace="sagemaker",
+        ResourceId=resource_id,
+        ScalableDimension="sagemaker:variant:DesiredInstanceCount",
+        PolicyType="TargetTrackingScaling",
+        TargetTrackingScalingPolicyConfiguration={
+            "TargetValue": 1.0,
+            "CustomizedMetricSpecification": {
+                "MetricName": "ApproximateBacklogSizePerInstance",
+                "Namespace": "AWS/SageMaker",
+                "Dimensions": [
+                    {"Name": "EndpointName", "Value": endpoint_name},
+                    {"Name": "VariantName",  "Value": "AllTraffic"},
+                ],
+                "Statistic": "Average",
+            },
+            "ScaleInCooldown": 300,   # 5 min before scaling in (avoid flapping)
+            "ScaleOutCooldown": 60,   # 1 min before scaling out
+        },
+    )
+    print(f"[update_endpoint] ✅ Auto-scaling (scale-to-zero) applied to {endpoint_name}")
 
 
 def main() -> None:
@@ -229,13 +297,21 @@ def main() -> None:
     # 4. Create new EndpointConfig
     config_name = create_endpoint_config(sm_client, args.run_id, model_name, args.s3_bucket)
 
-    # 5. Blue-green update (atomic, zero downtime)
-    update_endpoint(sm_client, args.endpoint_name, config_name)
+    # 5. Create (first run) or update (subsequent runs) the endpoint
+    if endpoint_exists(sm_client, args.endpoint_name):
+        print(f"[update_endpoint] Endpoint exists — performing blue-green update.")
+        update_endpoint(sm_client, args.endpoint_name, config_name)
+    else:
+        print(f"[update_endpoint] Endpoint does not exist yet — creating for the first time.")
+        create_endpoint(sm_client, args.endpoint_name, config_name)
 
-    # 6. Mark model as Approved in SM Registry
+    # 6. Apply/refresh scale-to-zero auto-scaling (idempotent — safe on every run)
+    apply_autoscaling(args.endpoint_name, args.region)
+
+    # 7. Mark model as Approved in SM Registry
     approve_model_package(sm_client, model_package_arn, args.run_id)
 
-    # 7. Persist deployment record
+    # 8. Persist deployment record
     write_deployment_metadata(s3_client, args.s3_bucket, args.run_id, config_name)
 
     print(f"\n[update_endpoint] ✅ Deployment complete. Model {args.run_id} is now live.")
