@@ -31,8 +31,6 @@ cache:
 
 phases:
   install:
-    runtime-versions:
-      python: 3.10
     commands:
       - pip install --quiet boto3
 

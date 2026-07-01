@@ -52,14 +52,10 @@ class TriggerStack(cdk.Stack):
             runtime=lambda_.Runtime.PYTHON_3_10,
             handler="handler.lambda_handler",
             code=lambda_.Code.from_asset(
+                # Dependencies (pymongo) are pre-installed into this folder via:
+                #   pip install -r requirements.txt -t deploy/lambda_fn/fine_tune_trigger/
+                # No Docker bundling needed — CDK just zips the folder as-is.
                 "lambda_fn/fine_tune_trigger",
-                bundling=cdk.BundlingOptions(
-                    image=lambda_.Runtime.PYTHON_3_10.bundling_image,
-                    command=[
-                        "bash", "-c",
-                        "pip install -r requirements.txt -t /asset-output && cp -r . /asset-output",
-                    ],
-                ),
             ),
             timeout=cdk.Duration.minutes(5),
             memory_size=256,
