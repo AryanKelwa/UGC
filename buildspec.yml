@@ -38,8 +38,8 @@ phases:
       - echo "=== Building Docker image with layer cache ==="
       - docker build --cache-from $ECR_URI:latest --build-arg BUILDKIT_INLINE_CACHE=1 -t $ECR_REPO_NAME:latest -t $ECR_REPO_NAME:$BUILD_TAG -f docker/Dockerfile .
       - echo "=== Tagging for ECR ==="
-      - docker tag $ECR_REPO_NAME:latest  $ECR_URI:latest
-      - docker tag $ECR_REPO_NAME:$BUILD_TAG $ECR_URI:$BUILD_TAG
+      - docker tag "$ECR_REPO_NAME:latest" "$ECR_URI:latest"
+      - docker tag "$ECR_REPO_NAME:$BUILD_TAG" "$ECR_URI:$BUILD_TAG"
 
   post_build:
     commands:
