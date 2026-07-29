@@ -17,7 +17,6 @@ Environment variables passed to all CodeBuild stages:
   AWS_SAGEMAKER_ROLE_ARN, SNS_APPROVAL_TOPIC_ARN
 """
 
-import yaml
 from pathlib import Path
 
 import aws_cdk as cdk
@@ -195,15 +194,10 @@ class PipelineStack(cdk.Stack):
                     compute_type=standard_compute,
                     privileged=(name == "Build"),  # Docker-in-Docker for BUILD stage only
                 ),
-                # Load the buildspec YAML from disk at synth time and embed
-                # it inline. from_source_filename() requires the project to
-                # have its own source, but in a CodePipeline the pipeline
-                # supplies the artifact — so the project source is NoSource.
-                build_spec=codebuild.BuildSpec.from_object(
-                    yaml.safe_load(
-                        (_PROJECT_ROOT / buildspec_file).read_text(encoding="utf-8")
-                    )
-                ),
+                # Use from_source_filename() so CodeBuild reads the raw buildspec
+                # file directly from the source repository artifact in CodePipeline,
+                # avoiding YAML serialization corruption caused by from_object().
+                build_spec=codebuild.BuildSpec.from_source_filename(buildspec_file),
                 environment_variables=shared_env_vars,
                 timeout=cdk.Duration.hours(6),  # Allow enough time for training job polling
                 # S3 pip cache: restores /root/.cache/pip before install phase.
