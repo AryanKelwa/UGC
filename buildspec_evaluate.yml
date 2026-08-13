@@ -38,7 +38,7 @@ phases:
   pre_build:
     commands:
       - echo "=== Checking training output exists in S3 ==="
-      - echo "Run ID: $RUN_ID"
+      - echo "Run ID = $RUN_ID"
       - |
         aws s3 ls s3://$AWS_S3_BUCKET/llama-finetune/$RUN_ID/output/ \
           --region $AWS_REGION \
