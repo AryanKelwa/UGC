@@ -29,11 +29,11 @@ phases:
   pre_build:
     commands:
       - echo "=== Pre-build checks ==="
-      - echo "Run ID      : $RUN_ID"
-      - echo "S3 Bucket   : $AWS_S3_BUCKET"
-      - echo "Region      : $AWS_REGION"
-      - echo "Account     : $AWS_ACCOUNT_ID"
-      - echo "SM Role     : $AWS_SAGEMAKER_ROLE_ARN"
+      - echo "Run ID      = $RUN_ID"
+      - echo "S3 Bucket   = $AWS_S3_BUCKET"
+      - echo "Region      = $AWS_REGION"
+      - echo "Account     = $AWS_ACCOUNT_ID"
+      - echo "SM Role     = $AWS_SAGEMAKER_ROLE_ARN"
 
       # Verify dataset exists in S3 before launching expensive training
       - |
