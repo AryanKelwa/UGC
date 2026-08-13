@@ -29,7 +29,7 @@ phases:
 
   pre_build:
     commands:
-      - echo "=== Pre-build: generating Run ID ==="
+      - echo "=== Pre-build -- generating Run ID ==="
       # Derive a deterministic run ID from the pipeline execution ID (first 12 chars)
       - export SHORT_ID=$(echo $CODEBUILD_INITIATOR | tr '/' '-' | tail -c 12 | tr -d '\n')
       - export RUN_ID="run_$(date +%Y%m%d_%H%M%S)_${SHORT_ID}"
@@ -46,13 +46,13 @@ phases:
 
   build:
     commands:
-      - echo "=== Step 1/2: Running ETL — processed MongoDB records → local interim files ==="
+      - echo "=== Step 1/2 -- Running ETL — processed MongoDB records → local interim files ==="
       # Run ETL to pull processed records from MongoDB into local interim/ files.
       # This is the equivalent of the Kafka ETL pipeline but reads already-processed
       # records from MongoDB (etl_status=processed) directly into JSONL batch files.
       - python main.py etl --all
 
-      - echo "=== Step 2/2: Building train/val/test splits from interim files ==="
+      - echo "=== Step 2/2 -- Building train/val/test splits from interim files ==="
       # Merge interim batches, format to ChatML, shuffle, split 70/15/15.
       # Writes data/train.jsonl, data/val.jsonl, data/test.jsonl.
       - python main.py prepare

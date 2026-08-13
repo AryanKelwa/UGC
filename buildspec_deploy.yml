@@ -37,9 +37,9 @@ phases:
   pre_build:
     commands:
       - echo "=== DEPLOY stage starting ==="
-      - echo "Run ID   : $RUN_ID"
-      - echo "Endpoint : ${ENDPOINT_NAME:-llama-finetune-async}"
-      - echo "Region   : $AWS_REGION"
+      - echo "Run ID   = $RUN_ID"
+      - echo "Endpoint = ${ENDPOINT_NAME:-llama-finetune-async}"
+      - echo "Region   = $AWS_REGION"
 
       # Confirm registration metadata exists (sanity check)
       - |
