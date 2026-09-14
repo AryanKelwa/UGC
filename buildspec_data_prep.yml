@@ -75,7 +75,7 @@ phases:
       - VAL_COUNT=$(wc -l < data/processed/val.jsonl 2>/dev/null || echo 0)
       - echo "Records uploaded — train:$TRAIN_COUNT val:$VAL_COUNT"
 
-      # Write run metadata JSON to S3 for all downstream stages to reference
+      # Write run metadata JSON — both locally (for the CodePipeline artifact) and to S3
       - |
         python - <<'EOF'
         import json, os, boto3
@@ -93,6 +93,16 @@ phases:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "pipeline_execution": os.environ.get("CODEBUILD_INITIATOR", "unknown"),
         }
+
+        # Write locally so CodePipeline can zip this as the DataPrepOutput artifact.
+        # This is required — stages that list data_prep_output as extra_inputs will
+        # fail with NoSuchKey if the buildspec produces no artifact at all.
+        os.makedirs("pipeline_output", exist_ok=True)
+        with open("pipeline_output/run_meta.json", "w") as f:
+            json.dump(meta, f, indent=2)
+        print(f"run_meta.json written locally to pipeline_output/")
+
+        # Also upload to S3 for reference
         s3 = boto3.client("s3", region_name=region)
         s3.put_object(
             Bucket=bucket,
@@ -107,3 +117,13 @@ phases:
     commands:
       - echo "=== Data prep complete. RUN_ID=$RUN_ID ==="
       - echo "Splits available at s3://$AWS_S3_BUCKET/datasets/$RUN_ID/"
+
+# ── CodePipeline artifact ────────────────────────────────────────────────────
+# CodePipeline REQUIRES a non-empty artifact when outputs=[data_prep_output] is
+# declared in pipeline_stack.py. Without an artifacts block the stage produces
+# no zip, and downstream stages (TRAIN, EVALUATE, DEPLOY) that list
+# DataPrepOutput as an extra_input fail immediately with NoSuchKey (404).
+artifacts:
+  base-directory: pipeline_output
+  files:
+    - run_meta.json
